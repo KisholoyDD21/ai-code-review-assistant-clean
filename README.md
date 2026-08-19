@@ -1,6 +1,6 @@
 # AI Code Review Assistant
 
-A Streamlit app that reviews Python code the way a thorough senior engineer would: it runs Pylint and Flake8 for static analysis, then hands the code — plus those findings, as grounding — to an LLM (OpenAI or Gemini, your choice) for a structured review that finds bugs, flags security and performance issues, and explains *why* each one matters, not just what to change.
+A Streamlit app that reviews Python code the way a thorough senior engineer would: it runs Pylint and Flake8 for static analysis, then hands the code — plus those findings, as grounding — to an LLM (OpenAI or Gemini, your choice) for a structured review that finds bugs, flags security and performance issues, and explains *why* each one matters, not just what to change. View the app from here: https://ai-code-review-assistant-clean.streamlit.app/
 
 ## Features
 
