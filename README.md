@@ -1,4 +1,6 @@
-# AI Code Review Assistant
+<p align="center">
+  <img src="docs/images/brand-banner.png" alt="AI Code Review — The Red Pen for Python" width="620">
+</p>
 
 An AI-assisted Python code reviewer that combines **Pylint** and **Flake8** findings with a structured review from **OpenAI** or **Google Gemini**. Paste or upload a Python file to find bugs, security and performance concerns, and maintainability issues in one place.
 
@@ -9,7 +11,7 @@ An AI-assisted Python code reviewer that combines **Pylint** and **Flake8** find
 
 ## App preview
 
-![AI Code Review Assistant application screenshot](docs/images/app-screenshot.png)
+![AI Code Review Assistant app showing the Python logo, review settings, code editor, and provider status](docs/images/app-screenshot.png)
 
 ## Features
 
