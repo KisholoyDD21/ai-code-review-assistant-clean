@@ -16,6 +16,7 @@ An AI-assisted Python code reviewer that combines **Pylint** and **Flake8** find
 ## Features
 
 - **AI code review:** Choose OpenAI or Gemini and select the model and reasoning depth.
+- **Static-only mode:** Run Pylint and/or Flake8 without choosing an AI provider or model, or using an API key.
 - **Static analysis:** Run Pylint and Flake8 independently or together.
 - **Grounded findings:** Static-analysis results are passed to the AI as context, helping it focus on issues beyond style warnings.
 - **Python syntax validation:** Invalid syntax is reported before analysis starts.

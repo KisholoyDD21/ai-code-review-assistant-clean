@@ -59,3 +59,25 @@ def test_review_completes_with_static_analysis_when_ai_is_unavailable():
     assert not app.exception
     assert app.session_state["review_status"] == "static_only"
     assert any("Static analysis complete" in item.value for item in app.info)
+
+
+def test_static_only_mode_needs_no_ai_provider_or_model():
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(str(app_path)).run()
+    next(widget for widget in app.radio if widget.label == "Review mode").set_value(
+        "Static analysis only"
+    )
+    app.run()
+
+    assert not app.exception
+    assert not app.selectbox
+    assert not any("AI review unavailable" in item.value for item in app.warning)
+
+    app.text_area[0].set_value("def add(a, b):\n    return a + b\n")
+    next(button for button in app.button if button.label == "Run review").click()
+    app.run()
+
+    assert not app.exception
+    assert app.session_state["review_status"] == "static_only"
+    assert all(tab.label != "AI Review" for tab in app.tabs)
+    assert any("No AI provider or model was used" in item.value for item in app.info)

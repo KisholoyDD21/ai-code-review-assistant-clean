@@ -89,24 +89,54 @@ def _init_state() -> None:
         "last_error": None,
         "review_fingerprint": None,
         "review_status": "idle",
+        "review_mode": "AI-assisted",
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
 
 
-def _sidebar() -> tuple[str, AIReviewer | None, ModelChoice | None, str, bool, bool]:
+def _sidebar() -> tuple[str, AIReviewer | None, ModelChoice | None, str, bool, bool, str]:
     with st.sidebar:
         render_eyebrow("Review setup")
         with st.expander("Review settings", expanded=True):
-            provider_label = st.radio("AI provider", options=list(PROVIDERS.keys()), horizontal=True)
-            provider = PROVIDERS[provider_label]
-            model_choice = render_model_picker(
-                "Model", provider["models"], key=f"model_{provider_label}"
+            review_mode = st.radio(
+                "Review mode",
+                options=["AI-assisted", "Static analysis only"],
+                horizontal=True,
+                key="review_mode",
             )
-            reasoning_effort = st.select_slider(
-                "Analysis depth", options=REASONING_EFFORTS, value="medium",
-                help="Higher depth reasons more carefully before answering. Slower and costs more per review.",
-            )
+            provider_label = "Static analysis"
+            model_choice: ModelChoice | None = None
+            reasoning_effort = "medium"
+            reviewer: AIReviewer | None = None
+
+            if review_mode == "AI-assisted":
+                provider_label = st.radio(
+                    "AI provider", options=list(PROVIDERS.keys()), horizontal=True
+                )
+                provider = PROVIDERS[provider_label]
+                model_choice = render_model_picker(
+                    "Model", provider["models"], key=f"model_{provider_label}"
+                )
+                reasoning_effort = st.select_slider(
+                    "Analysis depth", options=REASONING_EFFORTS, value="medium",
+                    help="Higher depth reasons more carefully before answering. Slower and costs more per review.",
+                )
+
+                key_name = ENV_KEY_NAMES[provider_label]
+                api_key = os.environ.get(key_name, "")
+                if not api_key:
+                    try:
+                        api_key = st.secrets.get(key_name, "")
+                    except StreamlitSecretNotFoundError:
+                        api_key = ""
+                if api_key.strip():
+                    reviewer = provider["reviewer"](
+                        api_key=api_key,
+                        model=model_choice.id,
+                        reasoning_effort=reasoning_effort,
+                    )
+
             st.divider()
             render_eyebrow("Static analysis")
             run_pylint_flag = st.checkbox("Run Pylint", value=True)
@@ -115,30 +145,16 @@ def _sidebar() -> tuple[str, AIReviewer | None, ModelChoice | None, str, bool, b
         st.divider()
         with st.expander("About this tool"):
             st.markdown(
-                "Pastes or uploads a Python file, runs Pylint and Flake8 for static "
-                "analysis, then sends the code (plus those findings, for grounding) to "
-                "an LLM for a structured review: bugs, security and performance issues, "
+                "Pastes or uploads a Python file for Pylint and Flake8 static analysis, "
+                "with an optional AI-assisted review for bugs, security and performance issues, "
                 "and the reasoning behind each one.\n\n"
                 "**Stack:** Python, Streamlit, OpenAI / Gemini APIs, Pylint, Flake8."
             )
 
-        key_name = ENV_KEY_NAMES[provider_label]
-        api_key = os.environ.get(key_name, "")
-        if not api_key:
-            try:
-                api_key = st.secrets.get(key_name, "")
-            except StreamlitSecretNotFoundError:
-                api_key = ""
-
-        reviewer: AIReviewer | None = None
-        if api_key.strip():
-            reviewer = provider["reviewer"](
-                api_key=api_key,
-                model=model_choice.id,
-                reasoning_effort=reasoning_effort,
-            )
-
-        if reviewer is None:
+        if review_mode == "Static analysis only":
+            st.info("Static-only mode: no AI provider or model will be used.")
+        elif reviewer is None:
+            key_name = ENV_KEY_NAMES[provider_label]
             st.warning(
                 f"AI review unavailable: configure {key_name} in the server environment or Streamlit secrets. "
                 "Static analysis is still available."
@@ -152,6 +168,7 @@ def _sidebar() -> tuple[str, AIReviewer | None, ModelChoice | None, str, bool, b
             reasoning_effort,
             run_pylint_flag,
             run_flake8_flag,
+            review_mode,
         )
 
 
@@ -209,6 +226,13 @@ def _run_review(
         st.warning("Paste or upload some Python code first.")
         return
 
+    if reviewer is None and not run_pylint_flag and not run_flake8_flag:
+        message = "Enable Pylint or Flake8, or switch to AI-assisted review."
+        st.session_state["review_status"] = "error"
+        st.session_state["last_error"] = message
+        st.warning(message)
+        return
+
     try:
         ast.parse(stripped)
     except SyntaxError as exc:
@@ -256,6 +280,7 @@ def _review_fingerprint(
     run_pylint_flag: bool,
     run_flake8_flag: bool,
     ai_available: bool,
+    review_mode: str,
 ) -> str:
     values = (
         code,
@@ -266,6 +291,7 @@ def _review_fingerprint(
         run_pylint_flag,
         run_flake8_flag,
         ai_available,
+        review_mode,
     )
     serialized = json.dumps(values, ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
@@ -290,14 +316,17 @@ def _clear_stale_results(fingerprint: str) -> None:
     st.session_state["review_fingerprint"] = fingerprint
 
 
-def _render_review_status(reviewer: AIReviewer | None) -> None:
+def _render_review_status(reviewer: AIReviewer | None, review_mode: str) -> None:
     status = st.session_state.get("review_status", "idle")
     if status == "stale":
         st.warning("Source or review settings changed. Previous results were cleared; run a new review.")
     elif status == "success":
         st.success("Review complete. Findings match the current source and settings.")
     elif status == "static_only":
-        st.info("Static analysis complete. AI review is unavailable until a server API key is configured.")
+        if review_mode == "Static analysis only":
+            st.info("Static analysis complete. No AI provider or model was used.")
+        else:
+            st.info("Static analysis complete. AI review is unavailable until a server API key is configured.")
     elif status == "error":
         st.error(st.session_state.get("last_error") or "The review could not be completed.")
     elif reviewer is not None:
@@ -316,7 +345,8 @@ def _results() -> None:
         render_empty_state("Run a review to see findings here.")
         return
 
-    tab_labels = ["AI Review"]
+    review_mode = st.session_state.get("review_mode", "AI-assisted")
+    tab_labels = ["AI Review"] if review_mode == "AI-assisted" else []
     if pylint_result is not None:
         tab_labels.append("Pylint")
     if flake8_result is not None:
@@ -325,28 +355,29 @@ def _results() -> None:
     tabs = st.tabs(tab_labels)
     tab_map = dict(zip(tab_labels, tabs))
 
-    with tab_map["AI Review"]:
-        if review_result is None:
-            render_empty_state("No AI review yet \u2014 configure the provider API key on the server and run again.")
-        else:
-            render_verdict_stamp(review_result)
-            if review_result.strengths:
-                with st.expander(f"Strengths ({len(review_result.strengths)})", icon=":material/check_circle:"):
-                    for s in review_result.strengths:
-                        st.markdown(f"- {s}")
-            st.write("")
-            if not review_result.issues:
-                render_empty_state("No issues flagged.")
+    if "AI Review" in tab_map:
+        with tab_map["AI Review"]:
+            if review_result is None:
+                render_empty_state("No AI review yet \u2014 configure the provider API key on the server and run again.")
             else:
-                for i, issue in enumerate(
-                    sorted(review_result.issues, key=lambda x: x.line_start)
-                ):
-                    render_issue_card(issue, i)
-            if review_result.best_practice_notes:
+                render_verdict_stamp(review_result)
+                if review_result.strengths:
+                    with st.expander(f"Strengths ({len(review_result.strengths)})", icon=":material/check_circle:"):
+                        for s in review_result.strengths:
+                            st.markdown(f"- {s}")
                 st.write("")
-                render_eyebrow("Best practice notes")
-                for note in review_result.best_practice_notes:
-                    st.markdown(f"- {note}")
+                if not review_result.issues:
+                    render_empty_state("No issues flagged.")
+                else:
+                    for i, issue in enumerate(
+                        sorted(review_result.issues, key=lambda x: x.line_start)
+                    ):
+                        render_issue_card(issue, i)
+                if review_result.best_practice_notes:
+                    st.write("")
+                    render_eyebrow("Best practice notes")
+                    for note in review_result.best_practice_notes:
+                        st.markdown(f"- {note}")
 
     if pylint_result is not None:
         with tab_map["Pylint"]:
@@ -388,6 +419,7 @@ def main() -> None:
         reasoning_effort,
         run_pylint_flag,
         run_flake8_flag,
+        review_mode,
     ) = _sidebar()
 
     render_hero()
@@ -398,8 +430,12 @@ def main() -> None:
         run_clicked = st.button("Run review", type="primary", use_container_width=True)
     with right:
         render_eyebrow("Status")
-        st.markdown(f"**Provider:** {provider_label}")
-        st.markdown(f"**Model:** {model_choice.label if model_choice else '\u2014'}")
+        if review_mode == "Static analysis only":
+            st.markdown("**Mode:** Static analysis only")
+            st.markdown("**AI model:** Not used")
+        else:
+            st.markdown(f"**Provider:** {provider_label}")
+            st.markdown(f"**Model:** {model_choice.label if model_choice else '\u2014'}")
         st.markdown(f"**Pylint:** {'on' if run_pylint_flag else 'off'}  \u00b7  **Flake8:** {'on' if run_flake8_flag else 'off'}")
 
     fingerprint = _review_fingerprint(
@@ -411,6 +447,7 @@ def main() -> None:
         run_pylint_flag,
         run_flake8_flag,
         reviewer is not None,
+        review_mode,
     )
     if fingerprint != st.session_state["review_fingerprint"]:
         _clear_stale_results(fingerprint)
@@ -418,7 +455,7 @@ def main() -> None:
     if run_clicked:
         _run_review(code, reviewer, provider_label, model_choice, run_pylint_flag, run_flake8_flag)
 
-    _render_review_status(reviewer)
+    _render_review_status(reviewer, review_mode)
     st.write("")
     render_eyebrow("Findings")
     _results()
