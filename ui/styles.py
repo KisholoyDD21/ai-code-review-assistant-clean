@@ -96,7 +96,7 @@ def inject_global_styles() -> None:
         /* ---- Hero ---- */
         .acra-hero {{
             display: flex;
-            align-items: baseline;
+            align-items: center;
             gap: 0.6rem;
             margin-bottom: 0.1rem;
             flex-wrap: wrap;
@@ -110,6 +110,14 @@ def inject_global_styles() -> None:
             line-height: 1;
         }}
         .acra-hero-mark em {{ color: var(--red-ink); font-style: italic; }}
+        .acra-python-mark {{
+            display: block;
+            width: 2.4rem;
+            height: 2.4rem;
+            fill: var(--red-ink);
+            flex-shrink: 0;
+            overflow: visible;
+        }}
         .acra-tagline {{
             font-family: 'IBM Plex Mono', monospace;
             font-size: 0.78rem;

@@ -21,6 +21,8 @@ An AI-assisted Python code reviewer that combines **Pylint** and **Flake8** find
 - **Code input options:** Paste code, upload a `.py` file, or load the built-in example.
 - **No execution of submitted code:** The app parses and analyzes source; it does not run the submitted program.
 - **Server-side credentials:** API keys come from environment variables or Streamlit secrets, never from a browser input field.
+- **Privacy & Terms page:** Review how submitted code, provider requests, credentials, and AI output are handled.
+- **Fresh results:** Previous findings are cleared when source code or review settings change.
 
 ## Technology stack
 
@@ -115,6 +117,9 @@ ui/
   styles.py               Theme and CSS
 tests/
   test_static_analysis.py Static-analysis tests
+  test_app_ui.py          UI and result-state regression tests
+pages/
+  privacy_and_terms.py    In-app privacy and terms information
 docs/images/              README screenshots
 .streamlit/config.toml    Streamlit theme and server configuration
 requirements.txt          Runtime and test dependencies

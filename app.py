@@ -5,6 +5,8 @@ Run with:  streamlit run app.py
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 import os
 
 import streamlit as st
@@ -85,37 +87,30 @@ def _init_state() -> None:
         "provider_label": None,
         "model_choice": None,
         "last_error": None,
+        "review_fingerprint": None,
+        "review_status": "idle",
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
 
 
-def _sidebar() -> tuple[str, AIReviewer | None, ModelChoice | None, bool, bool]:
+def _sidebar() -> tuple[str, AIReviewer | None, ModelChoice | None, str, bool, bool]:
     with st.sidebar:
-        render_eyebrow("Configure")
-        provider_label = st.radio("AI provider", options=list(PROVIDERS.keys()), horizontal=True)
-        provider = PROVIDERS[provider_label]
-        model_choice = render_model_picker(
-            "Model", provider["models"], key=f"model_{provider_label}"
-        )
-        reasoning_effort = st.select_slider(
-            "Analysis depth", options=REASONING_EFFORTS, value="medium",
-            help="Higher depth reasons more carefully before answering. Slower and costs more per review.",
-        )
-
-        key_name = ENV_KEY_NAMES[provider_label]
-        api_key = os.environ.get(key_name, "")
-        if not api_key:
-            try:
-                api_key = st.secrets.get(key_name, "")
-            except StreamlitSecretNotFoundError:
-                api_key = ""
-        st.caption("API keys are loaded from server configuration and are never entered in the browser.")
-
-        st.divider()
-        render_eyebrow("Static analysis")
-        run_pylint_flag = st.checkbox("Run Pylint", value=True)
-        run_flake8_flag = st.checkbox("Run Flake8", value=True)
+        render_eyebrow("Review setup")
+        with st.expander("Review settings", expanded=True):
+            provider_label = st.radio("AI provider", options=list(PROVIDERS.keys()), horizontal=True)
+            provider = PROVIDERS[provider_label]
+            model_choice = render_model_picker(
+                "Model", provider["models"], key=f"model_{provider_label}"
+            )
+            reasoning_effort = st.select_slider(
+                "Analysis depth", options=REASONING_EFFORTS, value="medium",
+                help="Higher depth reasons more carefully before answering. Slower and costs more per review.",
+            )
+            st.divider()
+            render_eyebrow("Static analysis")
+            run_pylint_flag = st.checkbox("Run Pylint", value=True)
+            run_flake8_flag = st.checkbox("Run Flake8", value=True)
 
         st.divider()
         with st.expander("About this tool"):
@@ -127,10 +122,37 @@ def _sidebar() -> tuple[str, AIReviewer | None, ModelChoice | None, bool, bool]:
                 "**Stack:** Python, Streamlit, OpenAI / Gemini APIs, Pylint, Flake8."
             )
 
+        key_name = ENV_KEY_NAMES[provider_label]
+        api_key = os.environ.get(key_name, "")
+        if not api_key:
+            try:
+                api_key = st.secrets.get(key_name, "")
+            except StreamlitSecretNotFoundError:
+                api_key = ""
+
         reviewer: AIReviewer | None = None
         if api_key.strip():
-            reviewer = provider["reviewer"](api_key=api_key, model=model_choice.id, reasoning_effort=reasoning_effort)
-        return provider_label, reviewer, model_choice, run_pylint_flag, run_flake8_flag
+            reviewer = provider["reviewer"](
+                api_key=api_key,
+                model=model_choice.id,
+                reasoning_effort=reasoning_effort,
+            )
+
+        if reviewer is None:
+            st.warning(
+                f"AI review unavailable: configure {key_name} in the server environment or Streamlit secrets. "
+                "Static analysis is still available."
+            )
+        else:
+            st.success(f"{provider_label} AI review is ready.")
+        return (
+            provider_label,
+            reviewer,
+            model_choice,
+            reasoning_effort,
+            run_pylint_flag,
+            run_flake8_flag,
+        )
 
 
 def _code_input_area() -> str:
@@ -172,44 +194,114 @@ def _run_review(
     run_pylint_flag: bool,
     run_flake8_flag: bool,
 ) -> None:
+    st.session_state["review_result"] = None
+    st.session_state["pylint_result"] = None
+    st.session_state["flake8_result"] = None
+    st.session_state["provider_label"] = None
+    st.session_state["model_choice"] = None
+    st.session_state["last_error"] = None
+    st.session_state["review_status"] = "running"
+
     stripped = code.strip()
     if not stripped:
+        st.session_state["review_status"] = "error"
+        st.session_state["last_error"] = "Paste or upload some Python code first."
         st.warning("Paste or upload some Python code first.")
         return
 
     try:
         ast.parse(stripped)
     except SyntaxError as exc:
-        st.error(f"That isn't valid Python yet \u2014 line {exc.lineno}, column {exc.offset}: {exc.msg}")
+        message = f"That isn't valid Python yet \u2014 line {exc.lineno}, column {exc.offset}: {exc.msg}"
+        st.session_state["review_status"] = "error"
+        st.session_state["last_error"] = message
+        st.error(message)
         return
 
-    pylint_result = _cached_pylint(stripped) if run_pylint_flag else None
-    flake8_result = _cached_flake8(stripped) if run_flake8_flag else None
-    st.session_state["pylint_result"] = pylint_result
-    st.session_state["flake8_result"] = flake8_result
+    with st.status("Review in progress", expanded=True) as progress:
+        progress.write("Running the selected static analyzers...")
+        pylint_result = _cached_pylint(stripped) if run_pylint_flag else None
+        flake8_result = _cached_flake8(stripped) if run_flake8_flag else None
+        st.session_state["pylint_result"] = pylint_result
+        st.session_state["flake8_result"] = flake8_result
 
-    if reviewer is None:
-        st.session_state["review_result"] = None
-        st.session_state["last_error"] = None
-        st.warning(
-            f"No API key configured \u2014 showing static analysis only. "
-            f"Set {ENV_KEY_NAMES[provider_label]} in the server environment or Streamlit secrets for an AI review."
-        )
-        return
+        if reviewer is None:
+            st.session_state["review_status"] = "static_only"
+            progress.update(label="Static analysis complete", state="complete")
+            return
 
-    static_context = format_static_context([r for r in (pylint_result, flake8_result) if r is not None])
-    with st.spinner(f"Reviewing with {provider_label}\u2026"):
+        static_context = format_static_context([r for r in (pylint_result, flake8_result) if r is not None])
+        progress.write(f"Requesting structured review from {provider_label}...")
         try:
             result = reviewer.review(stripped, st.session_state["filename"], static_context)
         except ReviewError as exc:
-            st.session_state["review_result"] = None
             st.session_state["last_error"] = str(exc)
+            st.session_state["review_status"] = "error"
+            progress.update(label="AI review failed", state="error")
             return
 
-    st.session_state["review_result"] = result
-    st.session_state["last_error"] = None
-    st.session_state["provider_label"] = provider_label
-    st.session_state["model_choice"] = model_choice
+        st.session_state["review_result"] = result
+        st.session_state["review_status"] = "success"
+        st.session_state["provider_label"] = provider_label
+        st.session_state["model_choice"] = model_choice
+        progress.update(label="Review complete", state="complete")
+
+
+def _review_fingerprint(
+    code: str,
+    filename: str,
+    provider_label: str,
+    model_choice: ModelChoice | None,
+    reasoning_effort: str,
+    run_pylint_flag: bool,
+    run_flake8_flag: bool,
+    ai_available: bool,
+) -> str:
+    values = (
+        code,
+        filename,
+        provider_label,
+        model_choice.id if model_choice else "",
+        reasoning_effort,
+        run_pylint_flag,
+        run_flake8_flag,
+        ai_available,
+    )
+    serialized = json.dumps(values, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _clear_stale_results(fingerprint: str) -> None:
+    has_results = any(
+        st.session_state.get(key) is not None
+        for key in ("review_result", "pylint_result", "flake8_result")
+    )
+    if has_results:
+        st.session_state["review_result"] = None
+        st.session_state["pylint_result"] = None
+        st.session_state["flake8_result"] = None
+        st.session_state["provider_label"] = None
+        st.session_state["model_choice"] = None
+        st.session_state["last_error"] = None
+        st.session_state["review_status"] = "stale"
+    elif st.session_state.get("review_status") == "error":
+        st.session_state["last_error"] = None
+        st.session_state["review_status"] = "idle"
+    st.session_state["review_fingerprint"] = fingerprint
+
+
+def _render_review_status(reviewer: AIReviewer | None) -> None:
+    status = st.session_state.get("review_status", "idle")
+    if status == "stale":
+        st.warning("Source or review settings changed. Previous results were cleared; run a new review.")
+    elif status == "success":
+        st.success("Review complete. Findings match the current source and settings.")
+    elif status == "static_only":
+        st.info("Static analysis complete. AI review is unavailable until a server API key is configured.")
+    elif status == "error":
+        st.error(st.session_state.get("last_error") or "The review could not be completed.")
+    elif reviewer is not None:
+        st.caption("Ready to review with the selected provider.")
 
 
 def _results() -> None:
@@ -285,11 +377,18 @@ def _results() -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="AI Code Review Assistant", page_icon="\U0001f58b\ufe0f", layout="wide")
+    st.set_page_config(page_title="AI Code Review Assistant", page_icon="\U0001f40d", layout="wide")
     inject_global_styles()
     _init_state()
 
-    provider_label, reviewer, model_choice, run_pylint_flag, run_flake8_flag = _sidebar()
+    (
+        provider_label,
+        reviewer,
+        model_choice,
+        reasoning_effort,
+        run_pylint_flag,
+        run_flake8_flag,
+    ) = _sidebar()
 
     render_hero()
 
@@ -303,9 +402,23 @@ def main() -> None:
         st.markdown(f"**Model:** {model_choice.label if model_choice else '\u2014'}")
         st.markdown(f"**Pylint:** {'on' if run_pylint_flag else 'off'}  \u00b7  **Flake8:** {'on' if run_flake8_flag else 'off'}")
 
+    fingerprint = _review_fingerprint(
+        code,
+        st.session_state["filename"],
+        provider_label,
+        model_choice,
+        reasoning_effort,
+        run_pylint_flag,
+        run_flake8_flag,
+        reviewer is not None,
+    )
+    if fingerprint != st.session_state["review_fingerprint"]:
+        _clear_stale_results(fingerprint)
+
     if run_clicked:
         _run_review(code, reviewer, provider_label, model_choice, run_pylint_flag, run_flake8_flag)
 
+    _render_review_status(reviewer)
     st.write("")
     render_eyebrow("Findings")
     _results()
