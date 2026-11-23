@@ -9,6 +9,7 @@ import os
 
 import streamlit as st
 from dotenv import load_dotenv
+from streamlit.errors import StreamlitSecretNotFoundError
 
 from core.ai_reviewer import PROVIDERS, REASONING_EFFORTS, AIReviewer, ModelChoice, ReviewError
 from core.models import ReviewResult
@@ -102,13 +103,14 @@ def _sidebar() -> tuple[str, AIReviewer | None, ModelChoice | None, bool, bool]:
             help="Higher depth reasons more carefully before answering. Slower and costs more per review.",
         )
 
-        env_key = os.environ.get(ENV_KEY_NAMES[provider_label], "")
-        api_key = st.text_input(
-            f"{provider_label} API key",
-            value=env_key,
-            type="password",
-            help=f"Read from ${ENV_KEY_NAMES[provider_label]} if set. Kept only in this session, never written to disk.",
-        )
+        key_name = ENV_KEY_NAMES[provider_label]
+        api_key = os.environ.get(key_name, "")
+        if not api_key:
+            try:
+                api_key = st.secrets.get(key_name, "")
+            except StreamlitSecretNotFoundError:
+                api_key = ""
+        st.caption("API keys are loaded from server configuration and are never entered in the browser.")
 
         st.divider()
         render_eyebrow("Static analysis")
@@ -189,7 +191,10 @@ def _run_review(
     if reviewer is None:
         st.session_state["review_result"] = None
         st.session_state["last_error"] = None
-        st.warning(f"No API key set \u2014 showing static analysis only. Add an API key for {provider_label} in the sidebar for an AI review.")
+        st.warning(
+            f"No API key configured \u2014 showing static analysis only. "
+            f"Set {ENV_KEY_NAMES[provider_label]} in the server environment or Streamlit secrets for an AI review."
+        )
         return
 
     static_context = format_static_context([r for r in (pylint_result, flake8_result) if r is not None])
@@ -230,7 +235,7 @@ def _results() -> None:
 
     with tab_map["AI Review"]:
         if review_result is None:
-            render_empty_state("No AI review yet \u2014 add an API key in the sidebar and run again.")
+            render_empty_state("No AI review yet \u2014 configure the provider API key on the server and run again.")
         else:
             render_verdict_stamp(review_result)
             if review_result.strengths:

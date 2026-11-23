@@ -133,7 +133,7 @@ class OpenAIReviewer(AIReviewer):
                 max_output_tokens=MAX_OUTPUT_TOKENS,
             )
         except AuthenticationError as exc:
-            raise ReviewError("OpenAI rejected the API key. Double-check it in the sidebar.") from exc
+            raise ReviewError("OpenAI rejected the configured API key. Check the server configuration.") from exc
         except RateLimitError as exc:
             raise ReviewError("OpenAI rate-limited this request. Wait a moment and try again.") from exc
         except APITimeoutError as exc:

@@ -1,102 +1,143 @@
 # AI Code Review Assistant
 
-A Streamlit app that reviews Python code the way a thorough senior engineer would: it runs Pylint and Flake8 for static analysis, then hands the code — plus those findings, as grounding — to an LLM (OpenAI or Gemini, your choice) for a structured review that finds bugs, flags security and performance issues, and explains *why* each one matters, not just what to change. View the app from here: https://ai-code-review-assistant-clean.streamlit.app/
+An AI-assisted Python code reviewer that combines **Pylint** and **Flake8** findings with a structured review from **OpenAI** or **Google Gemini**. Paste or upload a Python file to find bugs, security and performance concerns, and maintainability issues in one place.
+
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Built with Streamlit](https://img.shields.io/badge/Built%20with-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+
+**Live app:** [ai-code-review-assistant-clean.streamlit.app](https://ai-code-review-assistant-clean.streamlit.app/)
+
+## App preview
+
+![AI Code Review Assistant application screenshot](docs/images/app-screenshot.png)
 
 ## Features
 
-- **Two static analyzers, real subprocesses.** Pylint and Flake8 run against your code in an isolated temp directory with a timeout. Neither tool executes the code it's analyzing — see [Security notes](#security-notes).
-- **Two AI providers, one schema.** Switch between OpenAI and Gemini per review. Both are constrained to the same structured output (severity, category, line range, explanation, suggestion, optional fixed snippet) via each provider's native structured-output mode — no regex-scraping free-form text.
-- **Static analysis grounds the AI pass.** Pylint/Flake8 findings are passed into the prompt as context the model verifies rather than restates, so the AI review adds logic bugs, security issues, and design problems static analyzers can't see, instead of just repeating a linter in prose.
-- **Adjustable reasoning depth.** A low/medium/high slider maps to OpenAI's `reasoning.effort` and Gemini's `thinking_level` — spend more compute on code you actually care about, less on a quick pass.
-- **Downloadable report.** Every review can be exported as a single self-contained Markdown file (verdict, issues, static analysis tables, and the reviewed source).
-- **Never executes your code.** Only static analysis, only in temp directories.
+- **AI code review:** Choose OpenAI or Gemini and select the model and reasoning depth.
+- **Static analysis:** Run Pylint and Flake8 independently or together.
+- **Grounded findings:** Static-analysis results are passed to the AI as context, helping it focus on issues beyond style warnings.
+- **Python syntax validation:** Invalid syntax is reported before analysis starts.
+- **Report export:** View and download a Markdown report containing findings and the reviewed source.
+- **Code input options:** Paste code, upload a `.py` file, or load the built-in example.
+- **No execution of submitted code:** The app parses and analyzes source; it does not run the submitted program.
+- **Server-side credentials:** API keys come from environment variables or Streamlit secrets, never from a browser input field.
+
+## Technology stack
+
+| Area | Technologies |
+| --- | --- |
+| Language and UI | Python 3.10+, Streamlit |
+| AI providers | OpenAI Responses API, Google Gemini Interactions API |
+| AI SDKs | `openai`, `google-genai` |
+| Static analysis | Pylint, Flake8 |
+| Data validation | Pydantic |
+| Configuration | `python-dotenv`, environment variables, Streamlit secrets |
+| Testing | pytest |
+
+Dependency version ranges are maintained in [`requirements.txt`](requirements.txt). The selected model IDs are configured in [`core/ai_reviewer.py`](core/ai_reviewer.py).
 
 ## Getting started
 
-```bash
-git clone <your-repo-url>
-cd ai-code-review-assistant
-python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+### 1. Install
 
-cp .env.example .env
-# then fill in OPENAI_API_KEY and/or GEMINI_API_KEY in .env
-# (or just paste a key into the sidebar at runtime -- either works)
+```shell
+git clone https://github.com/KisholoyDD21/ai-code-review-assistant-clean.git
+cd ai-code-review-assistant-clean
+python -m venv .venv
+```
 
+Activate the virtual environment:
+
+```powershell
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+```
+
+```shell
+# macOS / Linux
+source .venv/bin/activate
+```
+
+Install the dependencies:
+
+```shell
+python -m pip install -r requirements.txt
+```
+
+### 2. Configure an AI provider (optional)
+
+Pylint and Flake8 work without an AI key. To enable AI reviews, configure the key for the provider you intend to use. Keys are read on the server and are not entered or displayed in the web app.
+
+For local development, copy `.env.example` to `.env` and add your key:
+
+```dotenv
+OPENAI_API_KEY=your-openai-key
+GEMINI_API_KEY=your-gemini-key
+```
+
+You only need to set the key for the provider you use. `.env` is ignored by Git.
+
+Alternatively, add the key to `.streamlit/secrets.toml`:
+
+```toml
+OPENAI_API_KEY = "your-openai-key"
+GEMINI_API_KEY = "your-gemini-key"
+```
+
+For hosted deployments, configure secrets in the hosting platform (for example, Streamlit Community Cloud's app secrets). Do not commit credentials to the repository. Environment variables take precedence over Streamlit secrets when both are set.
+
+### 3. Run
+
+```shell
 streamlit run app.py
 ```
 
-Open the URL Streamlit prints (defaults to `http://localhost:8501`). Paste code, click **Load example** to try it with a pre-built buggy snippet, or upload a `.py` file, then **Run review**.
+Open the local URL printed by Streamlit, paste or upload Python code, choose the analysis options, and select **Run review**.
 
 ## How it works
 
-```
- code (paste / upload)
-        │
-        ├──► ast.parse() ── syntax check, fails fast with a precise line/col error
-        │
-        ├──► Pylint  ──┐
-        ├──► Flake8  ──┤  (subprocess, JSON/text output, parsed into StaticIssue)
-        │              │
-        │              ▼
-        └──────► prompt = code + static findings + review instructions
-                        │
-                        ▼
-              OpenAI Responses API  or  Gemini Interactions API
-                 (structured output, schema = ReviewResult)
-                        │
-                        ▼
-                 Streamlit renders: verdict stamp, issue cards,
-                 static analysis tables, downloadable report
-```
+1. The app checks the submitted source with Python's AST parser and reports syntax errors early.
+2. Enabled static analyzers inspect the source in temporary files with subprocess timeouts.
+3. If a provider key is configured, the source and static findings are sent to the selected AI provider for a schema-constrained review.
+4. Findings are shown in the app and can be exported as a Markdown report.
 
-## Project structure
+## Project layout
 
-```
-ai-code-review-assistant/
-├── app.py                      # Streamlit entry point / page composition
-├── core/
-│   ├── models.py                # Pydantic schema shared with the AI structured output
-│   ├── static_analysis.py       # Pylint + Flake8 subprocess wrappers and parsers
-│   ├── ai_reviewer.py            # Provider abstraction: OpenAIReviewer, GeminiReviewer
-│   └── report.py                 # Markdown report builder
-├── ui/
-│   ├── styles.py                  # Design tokens + injected CSS
-│   └── components.py              # Badges, issue cards, the verdict stamp
-├── tests/
-│   └── test_static_analysis.py    # Runs the real tools against known-buggy snippets
-├── .streamlit/config.toml         # Theme
-├── requirements.txt
-└── .env.example
+```text
+app.py                    Streamlit UI and review flow
+core/
+  ai_reviewer.py          OpenAI and Gemini provider integrations
+  models.py               Pydantic review-result schema
+  report.py               Markdown report generation
+  static_analysis.py      Pylint and Flake8 wrappers and parsers
+ui/
+  components.py           Reusable UI components
+  styles.py               Theme and CSS
+tests/
+  test_static_analysis.py Static-analysis tests
+docs/images/              README screenshots
+.streamlit/config.toml    Streamlit theme and server configuration
+requirements.txt          Runtime and test dependencies
 ```
 
-`core/` has no Streamlit import in it — the review pipeline is plain Python and could be driven from a CLI or a different frontend without changes.
+## Run tests
 
-## Tech stack
-
-Python 3.10+ · Streamlit · OpenAI (GPT-5.6 family, Responses API) · Gemini (3.x family, Interactions API) · Pylint · Flake8 · Pydantic
-
-Both AI integrations target each provider's *current* recommended entry point as of August 2026 — OpenAI's Responses API (`client.responses.parse`) rather than the older Chat Completions helper, and Gemini's Interactions API (`client.interactions.create`, GA since June 2026) rather than `generateContent`. Model IDs and SDK surfaces move fast; if a model in `core/ai_reviewer.py` (`OPENAI_MODELS` / `GEMINI_MODELS`) gets deprecated, that's the only place you need to update.
-
-## Testing
-
-```bash
+```shell
 pytest tests/ -v
 ```
 
-The tests run the actual `pylint` and `flake8` binaries against fixed snippets (no mocking), including a check that a snippet designed to `sys.exit()` and write a file never actually does either — confirming the "these tools never execute your code" claim in code, not just in a comment.
+The static-analysis tests use the real Pylint and Flake8 tools. They also verify that analyzing a sample designed to write a file and exit does not execute that code. AI-provider calls are not covered by the test suite because they require live credentials and return nondeterministic results.
 
-There's no automated test for the AI review path, since that requires a live API key and a non-deterministic model response. `core/ai_reviewer.py` is structured so the HTTP-calling code is thin and isolated if you want to add a mocked test later.
+## Security and privacy
 
-## Security notes
+- The app does not expose an API-key field in the browser. Configure keys in the server environment, `.env`, or Streamlit secrets.
+- API keys must not be committed. Keep `.env` and `.streamlit/secrets.toml` private.
+- Submitted code is sent to the selected AI provider only when an API key is configured and an AI review is run. Review your provider's data-handling terms before sending sensitive source code.
+- The static analyzers inspect source without executing the submitted program. As with any hosted web app, use appropriate access controls before deploying it publicly.
 
-- **Static analysis never executes your code.** Pylint (via astroid) and Flake8 (via `ast`/`tokenize`) both build a syntax tree and analyze it; neither calls `exec()` or imports the submitted file as live code. `tests/test_static_analysis.py::test_analyzers_never_execute_the_submitted_code` checks this directly.
-- **API keys aren't persisted.** A key typed into the sidebar lives only in that Streamlit session's memory. Nothing is written to disk. Prefer `.env` (gitignored) over pasting keys on a shared machine.
-- **This is a single-user local tool, not a multi-tenant service.** If you deploy it somewhere public, put auth in front of it — anyone who can reach the app can spend your API budget.
+## Limitations
 
-## Known limitations
-
-- Reviews one file at a time; no cross-file or whole-repository context.
-- Static analysis is Pylint + Flake8 only — no type checking (mypy) or dedicated security scanning (Bandit, Semgrep) yet.
-- No review history — each session starts clean. Persisting past reviews would need a small database (SQLite is enough) behind `core/`.
-- The quality score is model-assigned, not calibrated against a rubric. Treat it as a relative signal, not ground truth.
+- Reviews one Python file at a time; there is no cross-file or repository-wide context.
+- Static checks are limited to Pylint and Flake8; type checkers and dedicated security scanners are not included.
+- Review history is not persisted.
+- AI-generated findings are suggestions and should be verified before applying.
